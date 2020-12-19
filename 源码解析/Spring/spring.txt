@@ -1,0 +1,201 @@
+课程主题
+	spring循环依赖解决问题分析&spring aop核心概念详解&动态代理模式
+
+课程目标
+	1.明白什么是循环依赖？
+	2.明白spring中的循环依赖是发生在什么时候？
+	3.明白spring中的循环依赖是如何解决的？
+	4.spring aop核心概念详解（通知、切面、切入点等等）
+	5.要明白aop到底是怎么回事？
+	6.要搞明白aop的底层原理是如何结合动态代理去实现的
+	7.掌握动态代理的两种方式的写法
+	
+课程回顾
+	1.IoC模块3.0版本的改造
+	2.spring ioc模块的核心流程的源码阅读。
+		* 入口
+		* 主流程
+		* 涉及到的类
+
+课程内容
+	1.spring循环依赖问题
+		* 搞清楚什么是循环依赖
+			依赖：引用、成员变量
+			
+			ClassA类---->ClassB类		ClassB类--->ClassA类
+			
+			依赖注入有两种注入方式：构造方法\setter方法注入			
+			
+		* 循环依赖分为：
+			* 构造方法
+			* setter方法
+			
+		* 循环依赖的例子
+		
+			OrderService{
+				UserService userService;
+			
+				saveOrder(){
+					//插入订单表（需要用户名称，而页面只传递一个用户ID）
+					//调用UserService去查询用户信息
+				}
+			}
+			
+			
+			UserService{
+				OrderService orderService；
+			
+				queryOrders(){
+					//调用OrderService的服务
+				}
+			}
+		
+		
+		
+		* spring中Bean实例的完整创建流程
+			** Bean的实例化（new）--------此处会反射调用构造器去new对象，所以说此处有可能会发生【构造器循环依赖】
+				*** 此处产生的【构造器循环依赖】无法自动解决，只能修改依赖关系或者改为setter方法去依赖。
+				OrderService{
+					UserService userService;
+				
+					public OrderService(UserService userService){
+						this.userService=userService;
+					}
+				
+					saveOrder(){
+						//插入订单表（需要用户名称，而页面只传递一个用户ID）
+						//调用UserService去查询用户信息
+					}
+				}
+				
+				*** 注意：
+					**** 此时从Java本身来说，Bean实例对象已经new 出来了，可以正常使用了。
+					**** 但是从Spring来说，该Bean必须完成三个步骤之后，才认为可以被人正常使用。
+
+				
+			** Bean的属性填充(setter)--------此处会对成员变量调用setter方法去进行依赖注入。----此处可能会发生【setter方法循环依赖】
+				*** 其实此时Bean实例已经存在了，只是没有对外暴露使用而已。
+				*** Spring的单例Bean被创建成功之后，会放入SingletonObjects的Map集合中，对外暴露使用。
+				*** 可以使用缓存的方式去解决循环依赖问题。
+				
+				ClassA{
+					ClassB
+				}								
+				ClassB{
+					ClassA
+				}
+				
+				二级缓存和三级缓存都是为了处理正在创建中的Bean这个场景的。
+				
+				此处例子，是为了说明二级缓存的作用的。
+				A---B    B---C  C---A
+				A---C
+				
+				
+				创建ClassA的流程
+					1.ClassA实例化
+						* 如果是单例bean，并且允许引用、该beanname存储到singletonsCurrentlyInCreation（Set集合）,那么ClassA对象会提前被暴露给三级缓存保存。
+					2.ClassA属性填充---给ClassB类型变量赋值(getBean)
+						2.1 ClassB实例化
+						2.2 ClassB属性填充---ClassA类型变量赋值(getBean---去ioc容器中找)---
+							* 此时去三级缓存中，可以找到该classA对应的ObjectFactory，通过该ObjectFactory获取代理对象获取原对象
+							* 换句话说，此处已经找到bean了（只是这个bean还没有完成完成创建，但是bean对象的引用已经获取到了）
+						
+							* 如果此时还找不到ClassA，那么又会从第一步开始了，那这样就成死循环了。
+								** 为了不让死循环，那么我们需要此时ClassA的实例被找到
+								** SingletonObjects集合中不存放半成品，所以需要一个新的Map集合来存储半成品（第二级缓存？？？？）
+									*** 为了保证提前暴露的对象，和最终的对象是一个，我们需要在获取这个提前暴露的对象的时候，也需要判断是否进行提前代理
+									*** 那么这个时候，我们就需要一个第三级缓存。（beanName，获取一个ObjectFactory的工厂类，该类就可以添加产生代理对象的逻辑）
+									*** 
+							
+							* 此时因为ClassA实例已经被new出来（提早暴露的循环引用）
+						2.3 ClassB初始化
+						2.4 ClassB实例放入SingletonObjects集合中
+					3.ClassA初始化
+					4.ClassA实例放入SingletonObjects集合中（才是对外暴露的引用集合）
+				
+			** Bean的初始化
+			
+		* spring中解决setter方法产生的循环依赖问题是通过三级缓存来解决的？
+			** singletonObjects：第一级缓存
+				***key是beanName
+				***value是成品的Bean实例对象
+			** earlySingletonObjects：第二级缓存
+				***key是beanName
+				***value是半成品的Bean实例对象
+				
+			** singletonFactories：第三级缓存
+				***key是beanName
+				***value是提早产生Bean实例的对象工厂ObjectFactory
+		
+		* 三级缓存获取对象的顺序
+			* 先从一级缓存中查找
+			* 再从二级缓存中查找
+			* 最后没有则从三级缓存中获取
+				** ObjectFactory获取对象，有可能获取的是代理对象
+				** 将获取到的对象，【放入二级缓存】，同时删除此beanName对应的三级缓存数据
+			
+		* 三级缓存添加对象的顺序
+			* 先将第一步new出来的对象，【添加到三级缓存】中的ObjectFactory里面保存。
+			
+			
+		* 思考题：
+			** 如果一个目标对象被aop动态加上事务增强功能（代理对象）的话，那么spring容器中存储的是目标对象，还是增强之后的对象，还是都存储？
+				*** 答案是spring只会存储一个对象，如果目标对象被AOP产生了代理对象，那么存储的就是代理对象。
+			** aop针对目标对象产生代理对象，是发生在bean创建的哪个流程呢？
+				*** 是发生在Bean初始化的过程中，具体说，是发生在Bean调用初始化方法之后，去进行AOP流程。
+				
+	2.spring中AOP的核心概念详解
+		* AOP：面向切面编程
+		* OOP：面向对象编程
+		* 结论：AOP可以更好的去补充OOP的缺点。
+		* 此处请听录播课
+		
+		* AOP作用：可以针对目标对象进行无感知（不修改目标对象的代码的情况下）的【功能增强】。
+		* 功能一般分为业务功能和系统功能。
+			** 业务功能：业务操作
+			** 系统功能：事务、日志、安全等
+		* AOP可以将业务功能和系统功能进行拆分，专人干专事。
+		* AOP是通过哪种方式去实现的无感知功能增强的呢？
+			** 静态织入（了解）
+				*** 使用字节码拼接技术，在编译期间，针对目标类对应的class文件进行静态编码（asm）
+			** 动态织入（掌握）
+				*** 使用动态代理技术，在运行期间，针对目标对象进行动态代理
+		
+		* AOP是一种思路，它的实现产品有多种：AspectJ、Spring AOP、Spring整合AspectJ
+		
+		* AOP核心概念分析：
+			** 连接点
+			** 切入点
+			** 目标对象
+			** 代理对象
+			** 通知
+			** 切面/通知器
+			
+			** 引介
+		
+		* 代理技术
+			** 静态代理
+				*** 在编译期间，为目标类，编写一个代理类，缺点是会编写很多的代理类
+			** 动态代理
+				*** 在运行期间，为目标类，利用动态代理技术产生代理对象
+		
+		* 动态代理模式
+			** JDK动态代理
+				*** 代理对象和目标对象是实现了同一个接口的。
+				*** 使用这种代理技术的前提：目标对象必须实现某一个业务接口。
+			** CGLib动态代理
+				*** 代理对象是目标对象的子类，它是通过对目标对象实现继承的方式，进行功能增强。
+				*** 使用这种代理技术的前提：不需要目标对实现业务接口。
+			** JDK动态代理是Spring默认使用的。
+		
+		* JDK动态代理
+			** 产生代理对象流程：Proxy.newProxyInstance();
+				*** 1.通过反射可以获取接口的信息，然后由Java来编写代理实现类的源代码（.java文件）
+				*** 2.Java来对它自己写的源代码进行编译（API），产生class文件
+				*** 3.产生的class文件，需要使用classloader加载到JVM内存中
+				*** 4.在JVM中产生代理对象
+			** 代理对象调用流程：InvocationHandler.invoke方法
+				*** 根据通知位置编写增强代码
+				*** 调用目标对象的方法
+			

@@ -1,0 +1,2 @@
+-XXaltjvm=dcevm
+-javaagent:D:\soft\IntelliJ IDEA 2018.3.4\hotswap-agent-1.4.2-SNAPSHOT.jar=autoHotswap=true
